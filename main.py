@@ -1,6 +1,6 @@
 import requests
 import datetime
-from utils import getActors, getGear, getDamageEvents, reportListQuery, gearData, enchantData, hitTypes
+from utils import getActors, getGear, getDamageEvents, reportListQuery, getSpellHitFromJSON, getSpellPenFromJSON, enchantData, hitTypes
 from variables import apiKey
 
 curseID = 11722  # Curse of Elements
@@ -26,15 +26,18 @@ class FriendlyActor:
     def getHitValue(self):
         hitValue = 89  # Hit from talents
         for item in self.gear:
-            hitValue += gearData.get(item.get('id'), 0)
+            hitValue += getSpellHitFromJSON(item.get('id'))
             hitValue += enchantData.get(item.get('permanentEnchant'), 0)
         if hitValue > 99:
             hitValue = 99
         return hitValue
 
-    # not used atm since only start of p5
     def getSpellPenValue(self):
-        return 0
+        spellPenValue = 0
+        for item in self.gear:
+            spellPenValue += getSpellPenFromJSON(item.get('id'))
+
+        return spellPenValue
 
 
 class DebuffEvent:
