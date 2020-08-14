@@ -120,32 +120,6 @@ def reportListQuery(zone: int, page: int, limit: int = 100) -> dict:
     return fetchGraphQL(query)
 
 
-def getItemJSON(id: int):
-    with open('item.json') as json_data:
-        data = json.load(json_data)
-
-    for item in data:
-        if item['id'] == id:
-            return item
-
-    return None
-
-def getSpellHitFromJSON(id: int):
-  itemJSON = getItemJSON(id)
-  if itemJSON != None:
-    if 'spellHit' in itemJSON:
-        #print('item ' + str(id) + ' has ' + str(itemJSON['spellHit']) + ' spell hit')
-        return itemJSON['spellHit']
-  return 0
-
-def getSpellPenFromJSON(id: int):
-  itemJSON = getItemJSON(id)
-  if itemJSON != None:
-    if 'spellPenetration' in itemJSON:
-        #print('item ' + str(id) + ' has ' + str(itemJSON['spellPenetration']) + ' spell pen')
-        return itemJSON['spellPenetration']
-  return 0
-
 enchantData = {
     2588: 1,  # Mage ZG enchant
 }
