@@ -8,13 +8,15 @@ from variables import apiKey
 
 curseID = 11722  # Curse of Elements
 damageModID = 22959  # Improved Scorch
-dpsDebuffValue = 0.03  # Improved Scorch
+damageModifiers = [
+    {'type': 'stackable', 'id': 22959, 'modifier': 0.03},  # Improved Scorch
+    {'type': 'simple', 'id': 23605, 'modifier': 0.15},  # Nightfall
+]
 spellIDs = [10151, 10207, 10199]  # Fireball, Scorch, Fire Blast
-spellIDquery = 'ability.id in ({})'.format(', '.join(str(spell) for spell in spellIDs))
 
 fight = {
-    'encounterID': 709,
-    'enemyIDs': [15263]  # wowhead boss ID
+    'encounterID': 714,
+    'enemyIDs': [15509]  # wowhead boss ID
 }
 
 # read item database into jsonData
@@ -58,6 +60,7 @@ class DebuffEvent:
 class Report:
     def __init__(self, url: str, encounterInfo: dict):
         self.url = url
+        self.spellIDQuery = 'ability.id in ({})'.format(', '.join(str(spell) for spell in spellIDs))
         self.encounterID = encounterInfo.get('encounterID')
         self.enemyIDs = encounterInfo.get('enemyIDs')
         self.actors, self.enemyID = self.getActors()
@@ -91,7 +94,8 @@ class Report:
                 continue
             actorList.append(FriendlyActor(actor))
         try:
-            enemyID = sorted(list(filter(lambda a: a.get('gameID') in self.enemyIDs, actors)), key=lambda a: a.get('id'))
+            enemyID = sorted(list(filter(lambda a: a.get('gameID') in self.enemyIDs, actors)),
+                             key=lambda a: a.get('id'))
             enemyID = enemyID[-1].get('id')
         except:
             enemyID = 0
@@ -113,27 +117,28 @@ class Report:
             return []
 
     def getDamageModifiers(self):
-        url = "https://classic.warcraftlogs.com:443/v1/report/events/debuffs/{reportUrl}?start=0&end=999999999999&hostility=1&by=source&abilityid={abilityID}&encounter={encounterID}&api_key={apiKey}".format(
-            reportUrl=self.url, abilityID=damageModID, encounterID=self.encounterID, apiKey=apiKey)
-        response = requests.get(url)
-        response.close()
-        data = response.json().get('events', [])
-        stackCount = 0
         debuffEvents = []
-        startingTiming = 0
-        for event in filter(lambda e: e.get('targetID') == self.enemyID, data):
-            if event.get('type') == 'applydebuff':
-                startingTiming = event['timestamp'] + 1
-                stackCount = 1
-            if event.get('type') == 'applydebuffstack':
-                debuffEvents.append(
-                    DebuffEvent(startingTiming, event.get('timestamp'), 1 + stackCount * dpsDebuffValue))
-                startingTiming = event.get('timestamp') + 1
-                stackCount += 1
-            if event.get('type') == 'removedebuff':
-                debuffEvents.append(
-                    DebuffEvent(startingTiming, event.get('timestamp'), 1 + stackCount * dpsDebuffValue))
-                stackCount = 0
+        for dmgMod in damageModifiers:
+            url = "https://classic.warcraftlogs.com:443/v1/report/events/debuffs/{reportUrl}?start=0&end=999999999999&hostility=1&by=source&abilityid={abilityID}&encounter={encounterID}&api_key={apiKey}".format(
+                reportUrl=self.url, abilityID=dmgMod.get('id'), encounterID=self.encounterID, apiKey=apiKey)
+            response = requests.get(url)
+            response.close()
+            data = response.json().get('events', [])
+            stackCount = 0
+            startingTiming = 0
+            for event in filter(lambda e: e.get('targetID') == self.enemyID, data):
+                if event.get('type') == 'applydebuff':
+                    startingTiming = event['timestamp'] + 1
+                    stackCount = 1
+                if event.get('type') == 'applydebuffstack':
+                    debuffEvents.append(
+                        DebuffEvent(startingTiming, event.get('timestamp'), 1 + stackCount * dmgMod.get('modifier')))
+                    startingTiming = event.get('timestamp') + 1
+                    stackCount += 1
+                if event.get('type') == 'removedebuff':
+                    debuffEvents.append(
+                        DebuffEvent(startingTiming, event.get('timestamp'), 1 + stackCount * dmgMod.get('modifier')))
+                    stackCount = 0
         return debuffEvents
 
     def mapPartialValue(self, damage):
@@ -166,12 +171,12 @@ class Report:
     def getDamageEvents(self):
         hitData = {}
         try:
-            events = getDamageEvents(self.url, self.encounterID, spellIDquery). \
-            get('data', {}). \
-            get('reportData', {}). \
-            get('report', {}). \
-            get('events', {}). \
-            get('data', [])
+            events = getDamageEvents(self.url, self.encounterID, self.spellIDQuery). \
+                get('data', {}). \
+                get('reportData', {}). \
+                get('report', {}). \
+                get('events', {}). \
+                get('data', [])
         except AttributeError:
             return {89: {0: 0, 25: 0, 50: 0, 75: 0, 100: 0}}
         events = list(filter(lambda event: event.get('sourceID') in [actor.id for actor in self.actors] and
@@ -207,7 +212,7 @@ for i in range(89, 100):
 
 reportList = set()
 page = 1
-while page < 20:
+while page < 2:
     tempReports = reportListQuery(1005, page, 100).get('data').get('reportData').get('reports').get('data')
     reportList.update([report.get('code') for report in tempReports])
     print(page)
@@ -227,7 +232,7 @@ for report in reportList:
         if totalCasts == 0:
             continue
         # calc excluding expected partials
-        expectedResists = int(totalCasts * (1 - i/100))
+        expectedResists = int(totalCasts * (1 - i / 100))
         castSum = table[i][25] * 0.25 + table[i][50] * 0.5 + table[i][75] * 0.75 + table[i][100]
         excludingResists = totalCasts - expectedResists
         if excludingResists < castSum:
