@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import requests
 import datetime
 import json
@@ -17,60 +19,33 @@ fight = {
     'enemyIDs': [15509]  # wowhead boss ID
 }
 
-json_data = json.load(open('item.json'))
-
-
-def getItemJSON(id: int):
-    for item in json_data:
-        if item['id'] == id:
-            return item
-
-    return None
-
-
-def getSpellHitFromJSON(id: int):
-    itemJSON = getItemJSON(id)
-    if itemJSON != None:
-        if 'spellHit' in itemJSON:
-            # print('item ' + str(id) + ' has ' + str(itemJSON['spellHit']) + ' spell hit')
-            return itemJSON['spellHit']
-    return 0
-
-
-def getSpellPenFromJSON(id: int):
-    itemJSON = getItemJSON(id)
-    if itemJSON != None:
-        if 'spellPenetration' in itemJSON:
-            # print('item ' + str(id) + ' has ' + str(itemJSON['spellPenetration']) + ' spell pen')
-            return itemJSON['spellPenetration']
-    return 0
-
+# read item database into jsonData
+with open('item.json') as json_data:
+    jsonData = json.load(json_data)
 
 class FriendlyActor:
     def __init__(self, actor: dict):
         self.id = actor.get('id')
         self.name = actor.get('name')
         self.gear = actor.get('gear')
-        self.hitValue = self.getHitValue()
-        self.spellPenValue = self.getSpellPenValue()
+        self.gearValues = self.getGearValues()
 
-    def getHitValue(self):
+    def getGearValues(self):
         hitValue = 89  # Hit from talents
-        for item in self.gear:
-            hitValue += getSpellHitFromJSON(item.get('id'))
-            hitValue += enchantData.get(item.get('permanentEnchant'), 0)
-        if hitValue > 99:
-            hitValue = 99
-        return hitValue
-
-    def getSpellPenValue(self):
         spellPenValue = 0
         for item in self.gear:
-            spellPenValue += getSpellPenFromJSON(item.get('id'))
-
-        return spellPenValue
-
-
+            itemId = item.get('id')
+            hitValue += enchantData.get(item.get('permanentEnchant'), 0)
+            for jsonItem in jsonData:
+                if jsonItem['id'] == itemId:
+                    if 'spellHit' in jsonItem:
+                        hitValue += jsonItem['spellHit']
+                    if 'spellPenetration' in jsonItem:
+                        spellPenValue += jsonItem['spellPenetration']
+        if hitValue > 99:
+            hitValue = 99
+        return {'spellHit': hitValue, 'spellPen': spellPenValue}
+        
 class DebuffEvent:
     def __init__(self, sTime: int, eTime: int, mod: float = 1.1):
         self.sTime = sTime
@@ -208,7 +183,9 @@ class Report:
                                            event.get('targetID') == self.enemyID and not event.get('tick'), events))
         for event in events:
             actor = self.getCurrentActor(event.get('sourceID'))
-            hitValue = actor.hitValue
+            gearValues = actor.getGearValues()
+            hitValue = gearValues['spellHit']
+            # spellPenValue = gearValues['spellPen']
             hitData.setdefault(hitValue, {0: 0, 25: 0, 50: 0, 75: 0, 100: 0})
             timestamp = event.get('timestamp')
             damage = event.get('unmitigatedAmount', 0) * hitTypes.get(event.get('hitType'), 1)

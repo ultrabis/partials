@@ -119,7 +119,6 @@ def reportListQuery(zone: int, page: int, limit: int = 100) -> dict:
     }"""
     return fetchGraphQL(query)
 
-
 enchantData = {
     2588: 1,  # Mage ZG enchant
 }
