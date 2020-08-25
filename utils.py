@@ -1,34 +1,23 @@
-import requests
-import json
+import sys, os, enum, time, json, requests
+from jsonpath_ng import jsonpath, parse
 from datetime import datetime
-import time
 from variables import apiUrl, headers
 
-#  "icon": "Mage-Frost" is frost spec
-#  "icon": "Mage" is fire spec
-
-#  Add id 'test' to wowhead gear search results and run, returns python formatted dict of item hit values
-#  node for hitValues is 9 for armor, 8 for weapons
-'''
-let table = document.getElementById('test')
-let childred = table.getElementsByClassName('listview-row')
-let finalStr = ""
-for (let row of childred) {
-    let nodes = row.childNodes
-    let childA = nodes[2].getElementsByTagName('a')[0]
-    let name = childA.innerHTML
-    let url = childA.href
-    url = url.replace(/\D+/, "").replace(/\D+/, "")
-    let hitValue = nodes[9].innerHTML
-    finalStr += url + ': ' + hitValue + ', #  ' + name + "\n"
-}
-console.log(finalStr)
-'''
-
+# these values match the `type` field in WCL's `abilities()`
+class MagicSchool(enum.Enum):
+    Invalid = 0
+    Physical = 1
+    Holy = 2
+    Fire = 4
+    Nature = 8
+    Frost = 16
+    Shadow = 32
+    Arcane = 64
 
 def fetchGraphQL(query):
     try:
-        response = requests.post(apiUrl, json={'query': query}, headers=headers).json()
+        response = requests.post(
+            apiUrl, json={'query': query}, headers=headers, timeout=60).json()
         if response.get('errors'):
             return None
         else:
@@ -40,12 +29,12 @@ def fetchGraphQL(query):
         fetchGraphQL(query)
 
 
-def getActors(url: str) -> dict:
+def fetchActors(reportCode: str) -> dict:
     query = '''
     {{
         reportData {{
-            report(code: "{reportUrl}") {{
-                masterData(translate: true) {{
+            report(code: "{reportCode}") {{
+                masterData(translate: false) {{
                     actors {{
                         id
                         name
@@ -58,11 +47,109 @@ def getActors(url: str) -> dict:
             }}
         }}
     }}
-    '''.format(reportUrl=url)
+    '''.format(reportCode=reportCode)
+    #print('query: ' + query)
     return fetchGraphQL(query)
 
+def fetchPlayers(reportCode: str) -> dict:
+    query = '''
+    {{
+        reportData {{
+            report(code: "{reportCode}") {{
+                masterData(translate: false) {{
+                    actors(type: "Player") {{
+                        id
+                        name
+                        type
+                        subType
+                        icon
+                        gameID
+                    }}
+                }}
+            }}
+        }}
+    }}
+    '''.format(reportCode=reportCode)
+    #print('query: ' + query)
+    return fetchGraphQL(query)
 
-def getGear(url: str, encounterID: int) -> dict:
+def fetchReportSummary(reportCode: str):
+    query = '''
+    {{
+        reportData {{
+            report(code: "{reportCode}") {{
+                masterData(translate: false) {{
+                    actors(type: "Player") {{
+                        icon
+                    }},
+                    abilities {{
+                        gameID
+                        type
+                    }}
+                }}
+            }}
+        }}
+    }}
+    '''.format(reportCode=reportCode)
+    response = fetchGraphQL(query)
+
+    abilities = [
+        match.value for match in 
+          parse('$.data.reportData.report.masterData.abilities[*]').find(response)
+    ]
+
+    actors = [
+        match.value for match in 
+          parse('$.data.reportData.report.masterData.actors[*]').find(response)
+    ]
+
+    # filter out stuff like melee and add to spells list
+    spellIDsSet = set()
+    for ability in abilities:
+        if int(ability.get('type')) > 2: 
+            spellIDsSet.add(ability.get('gameID'))
+
+    iconSet = set()
+    for actor in actors:
+        if actor.get('icon') != 'Unknown-null' and actor.get('icon') != 'Unknown':
+            iconSet.add(actor.get('icon'))
+
+    return {
+        'code': reportCode,
+        'spellIDs': list(spellIDsSet),
+        'icons': list(iconSet)    
+    }    
+
+def fetchSpellIDs(reportCode: str) -> dict:
+    # fetch abilities
+    query = '''
+    {{
+        reportData {{
+            report(code: "{reportCode}") {{
+                masterData(translate: false) {{
+                    abilities {{
+                        gameID
+                        name
+                        type
+                    }}
+                }}
+            }}
+        }}
+    }}
+    '''.format(reportCode=reportCode)
+    abilities = [
+        match.value for match in 
+          parse('$.data.reportData.report.masterData.abilities[*]').find(fetchGraphQL(query))
+    ]
+
+    # filter out stuff like melee and add to spells list
+    spellIDs = []
+    for ability in abilities:
+        if int(ability.get('type')) > 2: 
+            spellIDs.append(ability.get('gameID'))
+    return spellIDs
+
+def fetchGear(url: str, encounterID: int) -> dict:
     query = '''
     {{
         reportData {{
@@ -83,17 +170,17 @@ def getGear(url: str, encounterID: int) -> dict:
     return fetchGraphQL(query)
 
 
-def getDamageEvents(url: str, encounterID, abilityQuery: str) -> dict:
+def fetchDamageEvents(reportCode: str, encounterID, spec: str, abilityQuery: str) -> dict:
     query = '''
     {{
         reportData {{
-            report(code: "{reportUrl}") {{
+            report(code: "{reportCode}") {{
                 events(
                     dataType: DamageDone,
                     startTime: 0,
                     endTime: 999999999999,
                     encounterID: {encounterID},
-                    filterExpression: "source.spec='Fire' and {abilityQuery}"
+                    filterExpression: "source.spec='{spec}' and {abilityQuery}"
                 ) {{
                     nextPageTimestamp
                     data
@@ -101,11 +188,12 @@ def getDamageEvents(url: str, encounterID, abilityQuery: str) -> dict:
             }}
         }}
     }}
-    '''.format(reportUrl=url, encounterID=encounterID, abilityQuery=abilityQuery)
+    '''.format(reportCode=reportCode, encounterID=encounterID, spec=spec, abilityQuery=abilityQuery)
+    #print(query)
     return fetchGraphQL(query)
 
 
-def reportListQuery(zone: int, page: int, limit: int = 100) -> dict:
+def fetchReportList(zone: int, page: int, limit: int = 100) -> dict:
     query = """query {
       reportData {
         reports(zoneID: """ + str(zone) + """, limit: """ + str(limit) + """, page: """ + str(page) + """) {
@@ -114,10 +202,12 @@ def reportListQuery(zone: int, page: int, limit: int = 100) -> dict:
           }
           from
           to
+          has_more_pages
         }
       }
     }"""
     return fetchGraphQL(query)
+
 
 enchantData = {
     2588: 1,  # Mage ZG enchant
@@ -125,51 +215,3 @@ enchantData = {
 
 zanzilRingSet = [19893, 19905]
 
-hitTypes = {
-    1: 1,  # hitType = 1, hit
-    2: 1.5,  # hitType = 2, crit
-    14: 0,  # hitType = 14, resist
-    16: 1,  # hitType = 16, partial hit
-    17: 1.5  # hitType = 17, partial crit
-}
-
-'''
-"encounters": [
-      {
-        "id": 709,
-        "name": "The Prophet Skeram"
-      },
-      {
-        "id": 710,
-        "name": "Silithid Royalty"
-      },
-      {
-        "id": 711,
-        "name": "Battleguard Sartura"
-      },
-      {
-        "id": 712,
-        "name": "Fankriss the Unyielding"
-      },
-      {
-        "id": 713,
-        "name": "Viscidus"
-      },
-      {
-        "id": 714,
-        "name": "Princess Huhuran"
-      },
-      {
-        "id": 715,
-        "name": "Twin Emperors"
-      },
-      {
-        "id": 716,
-        "name": "Ouro"
-      },
-      {
-        "id": 717,
-        "name": "C'thun"
-      }
-    ],
-'''

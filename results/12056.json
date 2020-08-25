@@ -1,0 +1,1 @@
+{"enemyID": 12056, "enemyName": "Baron Geddon", "tables": [["school", "resistance", "casts", "misses", "full dmg", "25%", "50%", "75%"], ["arcane", 3.6, 1008, 117, 715, 108, 66, 2], ["fire", "IMMUNE", 277, 277, 0, 0, 0, 0], ["frost", 0.0, 1064, 79, 985, 0, 0, 0], ["nature", 0, 1000, 116, 758, 72, 45, 9], ["shadow", 3.56, 1019, 330, 557, 82, 42, 8]]}
