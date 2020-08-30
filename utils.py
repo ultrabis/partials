@@ -28,6 +28,37 @@ def fetchGraphQL(query):
         time.sleep(60)
         fetchGraphQL(query)
 
+def fetchAbilityEvents(reportCode: str, encounterID: int, targetID: int, abilityID: int, abilityTypes: list = []):
+    typeString = ''
+    abilityCount = len(abilityTypes)
+    if abilityCount > 0:
+        typeString = ' and type in ('
+        i = 1
+        for abilityType in abilityTypes:
+            typeString += '\\"' + abilityType + '\\"'
+            if i < abilityCount: 
+                typeString += ','
+            else:
+                typeString += ')'
+            i += 1
+
+    query = '''
+    {{
+      reportData {{
+        report(code: "{reportCode}") {{
+          events(dataType: All, startTime: 0, endTime: 999999999999, encounterID: {encounterID}, filterExpression: "ability.id = {abilityID}{typeString}") {{
+            nextPageTimestamp
+            data
+          }}
+        }}
+      }}
+    }}
+    '''.format(reportCode=reportCode, encounterID=encounterID, abilityID=abilityID, typeString=typeString)
+    
+    return list(filter(lambda event: event.get('targetID') == targetID, [
+        match.value for match in 
+            parse('$.data.reportData.report.events.data[*]').find(fetchGraphQL(query))
+    ]))
 
 def fetchActors(reportCode: str) -> dict:
     query = '''

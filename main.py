@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
-import os, sys, requests, datetime, gzip, json, enum, getopt
-from utils import fetchActors, fetchGear, fetchDamageEvents, fetchReportList, fetchReportSummary # graphql queries
+import os, sys, glob, requests, datetime, gzip, json, enum, getopt
+from utils import fetchActors, fetchGear, fetchDamageEvents, fetchAbilityEvents, fetchReportList, fetchReportSummary # graphql queries
 from utils import MagicSchool, enchantData
 from jsonpath_ng import jsonpath, parse
-from terminaltables import AsciiTable, DoubleTable, SingleTable
+from terminaltables import AsciiTable
 from variables import apiKey
 
 verbose = False
@@ -76,6 +76,10 @@ class Report:
                 get('data', [])
         except AttributeError:
             return [[], []]
+
+        if actors == None:
+            return [[], []]
+
         for actor in filter(lambda a: a.get('icon') == self.spec.get('icon'), actors):
             try:
                 actor['gear'] = next(a for a in gear if a.get('sourceID') == actor.get('id')).get('gear')
@@ -94,10 +98,6 @@ class Report:
         if not self.enemyID:
             return []
             
-        if self.options.get('ignoreCurses') == True:
-            print('Skipping curse')
-            return []
-
         if self.spec.get('curseID') == None:
             return []
 
@@ -119,9 +119,13 @@ class Report:
         for dmgMod in self.spec.get('dmgMods'):
             url = "https://classic.warcraftlogs.com:443/v1/report/events/debuffs/{reportCode}?start=0&end=999999999999&hostility=1&by=source&abilityid={abilityID}&encounter={encounterID}&api_key={apiKey}".format(
                 reportCode=self.reportCode, abilityID=dmgMod.get('id'), encounterID=self.encounterID, apiKey=apiKey)
-            response = requests.get(url)
-            response.close()
-            data = response.json().get('events', [])
+            try:
+                response = requests.get(url)
+                response.close()
+                data = response.json().get('events', [])
+            except:
+                return []
+
             stackCount = 0
             startingTiming = 0
             for event in filter(lambda e: e.get('targetID') == self.enemyID, data):
@@ -192,8 +196,14 @@ class Report:
                 continue
 
             damage = event.get('unmitigatedAmount', 0) * self.spec.get('hitTypes').get(event.get('hitType'), 1)
-            if self.spec.get('curseID') != None:
-                damage = self.getCurrentTimestamp(event.get('timestamp'), damage, self.curseEvents)
+            curseDamage = self.getCurrentTimestamp(event.get('timestamp'), damage, self.curseEvents)
+
+            # if skipCurses is set in arguments, we want to ignore any cast with a curse present
+            if self.options.get('skipCurses'):
+                if curseDamage > 0:
+                    continue
+            else:
+                damage = curseDamage
 
             if damage == 0: # miss
                 hitData[0] += 1
@@ -217,12 +227,14 @@ Usage: main.py [-h | -d | -a | -r <file.json>] | [OPTIONS] <TARGETS>
 -h                      Show usage and exit (this screen)
 -d                      Display all zone information and exit (zones, encounters, enemies)
 -r                      Display results from <file.json>
--a                      Display amalgamated results                       
+-a                      Display all results                       
 
 OPTIONS
 -v                      Verbose output (DEFAULT: False)
--c                      Disable cache check (DEFAULT: False)
--i                      Ignore casts with a curse active (DEFAULT: False)
+-q                      Quiet mode. (DEFAULT: False)
+-w                      Write results to the `results` directory (DEFAULT: False)
+-c                      Skip casts with a curse active (DEFAULT: False)
+-i                      Enemies to ignore delimited by comma (DEFAULT: None)
 -s  <spellCastLimit>    Stop scraping a school after number of casts reaches <spellCastLimit> (DEFAULT: 1000)
 -m  <magicSchoolNames>  Magic school names delimited by comma (DEFAULT: arcane,fire,frost,nature,shadow)
 
@@ -241,19 +253,21 @@ EXAMPLE
 # parse input arguments and return a dictionary with everything the main program needs
 def getOptions(argv):
     options = {
+        "quiet": False,
         "verbose": False,
-        "cacheCheck": True,
-        "ignoreCurses": False,
+        "skipCurses": False,
+        "writeResults": False,
         "spellCastLimit": 1000,
         "zoneID": None,
         "zoneName": None,
+        "ignoreEnemies": [],
         "encounters": [],
         "specs": [],
     }
     
     # parse args
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hdr:cs:vim:e:z:n:")
+        opts,args = getopt.getopt(sys.argv[1:], "hqdwar:s:vcm:e:i:z:n:")
     except getopt.GetoptError:
         printUsage()
         sys.exit(2)
@@ -268,22 +282,31 @@ def getOptions(argv):
         if opt == '-h':
             printUsage()
             sys.exit(0)
+        elif opt == '-a':
+            displayAllResults()
+            sys.exit(0)
         elif opt == '-d':
             displayZoneInfo()
             sys.exit(0)
         elif opt == '-r':
             with open(arg) as f:
                 resultsJson = json.load(f)
-            table_instance = SingleTable(resultsJson.get('tables'), resultsJson.get('enemyName'))
+            table_instance = AsciiTable(resultsJson.get('tables'), resultsJson.get('enemyName'))
             print(table_instance.table)
             sys.exit(0)
+        elif opt == '-w':
+            options['writeResults'] = True
+        elif opt == '-i':
+            for x in arg.split(','):
+                options['ignoreEnemies'].append(int(x))
         elif opt == '-v':
             options['verbose'] = True
+        elif opt == '-q':
+            options['verbose'] = False
+            options['quiet'] = True
         elif opt == '-c':
-            options['cacheCheck'] = False
-        elif opt == '-i':
             print('Ignoring casts with a curse active')
-            options['ignoreCurses'] = True
+            options['skipCurses'] = True
         elif opt == '-s':
             options['spellCastLimit'] = int(arg)
         elif opt == '-m':
@@ -294,7 +317,7 @@ def getOptions(argv):
             encounterID = int(arg)
         elif opt == '-e':
             enemyID = int(arg)
-        
+
     # build up specs based on selected magic schools. each magic school
     # is associated with a certain player spec, spells, curses, etc
     for x in magicSchoolNames.split(','):
@@ -435,7 +458,7 @@ def getOptions(argv):
                         options['encounters'].append({
                             'id': encounter['id'],
                             'name': encounter['name'],
-                            'enemies': [ {'id': enemy['id'], 'name': enemy['name']} ]
+                            'enemies': [ {'id': enemy['id'], 'name': enemy['name'], 'level': enemy['level']} ]
                         })
     else:
         print('ERROR: Must specify a zone, encounter or enemy')
@@ -447,8 +470,53 @@ def getOptions(argv):
         sys.exit(3)
 
     return(options)
-    
 
+# display all results (amalgamated)
+def displayAllResults():
+    table_data_without_curses = []
+    table_data_without_curses.append(('enemy', 'arcane', 'fire', 'frost', 'nature', 'shadow'))
+
+    table_data_with_curses = []
+    table_data_with_curses.append(('enemy', 'arcane', 'fire', 'frost', 'nature', 'shadow'))
+    
+    with open('zone.json') as zone_data:
+        zones = json.load(zone_data)
+
+    for zone in zones:
+        for encounter in zone['encounters']:
+            for enemy in encounter['enemies']:
+                enemyName = enemy.get('name') + ' (' + str(enemy.get('id')) + ')'
+                resultsWithCurses = 'results/withCurses/' + str(enemy.get('id')) + '.json'
+                if os.path.exists(resultsWithCurses):
+                    with open(resultsWithCurses) as f:
+                        resultsJson = json.load(f)
+                    tableJson = resultsJson.get('tables')
+                    table_data_with_curses.append((
+                        enemyName,
+                        tableJson[1][1],
+                        tableJson[2][1],
+                        '?', #tableJson[3][1], # frost is broke right now
+                        tableJson[4][1],
+                        tableJson[5][1]
+                    ))
+                
+                resultsWithoutCurses = 'results/withoutCurses/' + str(enemy.get('id')) + '.json'
+                if os.path.exists(resultsWithoutCurses):
+                    with open(resultsWithoutCurses) as f:
+                        resultsJson = json.load(f)
+                    tableJson = resultsJson.get('tables')
+                    table_data_without_curses.append((
+                        enemyName,
+                        tableJson[1][1],
+                        tableJson[2][1],
+                        '?', #tableJson[3][1], # frost is broke right now
+                        tableJson[4][1],
+                        tableJson[5][1]
+                    ))
+                
+    table_instance = AsciiTable(table_data_without_curses, 'Resistances (without curses)')
+    print(table_instance.table)
+                    
 # List all bosses (-l option)
 def displayZoneInfo(zoneID=0):
     with open('zone.json') as zone_data:
@@ -483,10 +551,6 @@ def getReportSummaries(options):
     reportSummariesTEMP = 'cache/' + str(zoneID) + '.json'
     reportSummariesGZIP = 'cache/' + str(zoneID) + '.json.gz'
     
-    if options['cacheCheck'] == False:
-        if options['verbose']: print('Skipping cache check')
-        return getJSONFromGZIPFile(reportSummariesGZIP)
-        
     if os.path.exists(reportSummariesGZIP):
         if options['verbose']: print('Cache exists (' + reportSummariesGZIP + '), skipping...')
         return getJSONFromGZIPFile(reportSummariesGZIP)
@@ -543,114 +607,6 @@ def reportSummaryHasIconForSpec(reportSummary, spec):
 
     return False
 
-def writeResults(hitTables, enemy, display=True):
-    hitTableArcane = hitTables[0]
-    hitTableFire = hitTables[1]
-    hitTableFrost = hitTables[2]
-    hitTableNature = hitTables[3]
-    hitTableShadow = hitTables[4]
-    
-    hitsArcane = hitTableArcane[25] + hitTableArcane[50] + hitTableArcane[75] + hitTableArcane[100]
-    hitsFire = hitTableFire[25] + hitTableFire[50] + hitTableFire[75] + hitTableFire[100]
-    hitsFrost = hitTableFrost[25] + hitTableFrost[50] + hitTableFrost[75] + hitTableFrost[100]
-    hitsNature = hitTableNature[25] + hitTableNature[50] + hitTableNature[75] + hitTableNature[100]
-    hitsShadow = hitTableShadow[25] + hitTableShadow[50] + hitTableShadow[75] + hitTableShadow[100]
-    
-    hitSumArcane = hitTableArcane[25] * 0.25 + hitTableArcane[50] * 0.5 + hitTableArcane[75] * 0.75 + hitTableArcane[100]
-    hitSumFire = hitTableFire[25] * 0.25 + hitTableFire[50] * 0.5 + hitTableFire[75] * 0.75 + hitTableFire[100]
-    hitSumFrost = hitTableFrost[25] * 0.25 + hitTableFrost[50] * 0.5 + hitTableFrost[75] * 0.75 + hitTableFrost[100]
-    hitSumNature = hitTableNature[25] * 0.25 + hitTableNature[50] * 0.5 + hitTableNature[75] * 0.75 + hitTableNature[100]
-    hitSumShadow = hitTableShadow[25] * 0.25 + hitTableShadow[50] * 0.5 + hitTableShadow[75] * 0.75 + hitTableShadow[100]
-
-    missesArcane = hitTableArcane[0]
-    missesFire = hitTableFire[0]
-    missesFrost = hitTableFrost[0]
-    missesNature = hitTableNature[0]
-    missesShadow = hitTableShadow[0]
-
-    castsArcane = hitsArcane + missesArcane
-    castsFire = hitsFire + missesFire
-    castsFrost = hitsFrost + missesFrost
-    castsNature = hitsNature + missesNature
-    castsShadow = hitsShadow + missesShadow
-
-    
-    if hitsArcane > 0: 
-        partialAverageArcane = round(100 * (1 - hitSumArcane / hitsArcane), 2)
-        resistArcane = max(round((partialAverageArcane * 4) - 24, 2), 0)
-    elif castsArcane >= 50 and castsArcane == missesArcane:
-        partialAverageArcane = 'IMMUNE'
-        resistArcane = 'IMMUNE'
-    else:
-        partialAverageArcane = '?'
-        resistArcane = '?'
-        
-    if hitsFire > 0: 
-        partialAverageFire = round(100 * (1 - hitSumFire / hitsFire), 2)
-        resistFire = max(round((partialAverageFire * 4) - 24, 2), 0)
-    elif castsFire >= 50 and castsFire == missesFire:
-        partialAverageFire = 'IMMUNE'
-        resistFire = 'IMMUNE'
-    else:
-        partialAverageFire = '?'
-        resistFire = '?'
-
-    if hitsFrost > 0:
-        partialAverageFrost = round(100 * (1 - hitSumFrost / hitsFrost), 2)
-        resistFrost = max(round(partialAverageFrost * 4, 2), 0) # frostbolt is binary and has no lvl based resist
-    elif castsFrost >= 50 and castsFrost == missesFrost:
-        partialAverageFrost = 'IMMUNE'
-        resistFrost = 'IMMUNE'
-    else:
-        partialAverageFrost = '?'
-        resistFrost = '?'
-        
-    if hitsNature > 0:
-        partialAverageNature = round(100 * (1 - hitSumNature / hitsNature), 2)
-        resistNature = max(round((partialAverageNature * 4) - 24, 2), 0)
-    elif castsNature >= 50 and castsNature == missesNature:
-        partialAverageNature = 'IMMUNE'
-        resistNature = 'IMMUNE'
-    else:
-        partialAverageNature = '?'
-        resistNature = '?'
-        
-    if hitsShadow > 0:
-        partialAverageShadow = round(100 * (1 - hitSumShadow / hitsShadow), 2)
-        resistShadow = max(round((partialAverageShadow * 4) - 24, 2), 0)
-    elif castsShadow >= 50 and castsShadow == missesShadow:
-        partialAverageShadow = 'IMMUNE'
-        resistShadow = 'IMMUNE'
-    else:
-        partialAverageShadow = '?'
-        resistShadow = '?'
-    
-    # note: the percentages used in the calculations reflect percent of damage done
-    # but when we talk about partial resists we actually mean the opposite.
-    # for e.g. a '75% partial' means that 75% damage was resisted.
-    # so that's why 25 and 75 are swapped when displaying
-    table_data = (
-        ('school', 'res', '#', 'miss', 'full', '25%', '50%', '75%'),
-        ('arcane', resistArcane, castsArcane, missesArcane, hitTableArcane[100], hitTableArcane[75], hitTableArcane[50], hitTableArcane[25]),
-        ('fire', resistFire, castsFire, missesFire, hitTableFire[100], hitTableFire[75], hitTableFire[50], hitTableFire[25]),
-        ('frost', resistFrost, castsFrost, missesFrost, hitTableFrost[100], hitTableFrost[75], hitTableFrost[50], hitTableFrost[25]),
-        ('nature', resistNature, castsNature, missesNature, hitTableNature[100], hitTableNature[75], hitTableNature[50], hitTableNature[25]),
-        ('shadow', resistShadow, castsShadow, missesShadow, hitTableShadow[100], hitTableShadow[75], hitTableShadow[50], hitTableShadow[25]),
-    )
-
-    outputFile = 'results/' + str(enemy.get('id')) + '.json'
-    out_file = open(outputFile, "w")
-    json.dump({
-        'enemyID': enemy.get('id'),
-        'enemyName': enemy.get('name'),
-        'tables': table_data
-    }, out_file)
-    out_file.close()
-
-    if display:
-        table_instance = SingleTable(table_data, enemy.get('name'))
-        print(table_instance.table)
-
 def reachedSpellCastLimit(options, hitTables, magicSchool):
     if magicSchool == MagicSchool.Arcane:
         hitTable = hitTables[0]
@@ -665,13 +621,45 @@ def reachedSpellCastLimit(options, hitTables, magicSchool):
 
     return (hitTable[0] + hitTable[25] + hitTable[50] + hitTable[75] + hitTable[100]) >= options.get('spellCastLimit')
 
+
+# Returns the actual target resistance using the partial average percent.
+# Actual resistance a.k.a 'resistance' does *not* include level based resistances.
+#
+# It's nonsensical to include level based resistances in a report of boss resistances,
+# because they're not innate to the boss, but rather a calculation done at the time of
+# spell cast. 
+def getResFromPartialAverage(partialPercent, magicSchool, playerLevel:int = 60, targetLevel:int = 63):
+    # get the level based resistances
+    if magicSchool == MagicSchool.Frost:
+        resFromLevel = 0
+    else:
+        if targetLevel > playerLevel:
+            levelDiff = targetLevel - playerLevel 
+        else:
+            levelDiff = 0
+
+        resFromLevel = levelDiff * 8
+
+    # convert partial percent to resistance and remove level based resistances
+    return max(round((partialPercent * 4) - resFromLevel, 2), 0)
+
 ##################################################################
-# processReport - main workhorse for each report
+# processReport
 ##################################################################
 def processReport(options, reportSummary, encounter, enemy, hitTables):
-    processedReport = False
     reportCode = reportSummary.get('code')
+    if options.get('skipCurses'):
+        enemyName = enemy.get('name') + ' (without curses)'
+    else:
+        enemyName = enemy.get('name') + ' (with curses)'
 
+    hitTableArcane = hitTables[0]
+    hitTableFire = hitTables[1]
+    hitTableFrost = hitTables[2]
+    hitTableNature = hitTables[3]
+    hitTableShadow = hitTables[4]
+
+    changed = False
     for spec in options.get('specs'):
         if verbose: print(spec)
         magicSchool = spec.get('magicSchool')
@@ -706,29 +694,142 @@ def processReport(options, reportSummary, encounter, enemy, hitTables):
         elif magicSchool == MagicSchool.Shadow:
             hitTable = hitTables[4]
         for x in hitValues: hitTable[x] = hitTable[x] + hitValues[x]
-        processedReport = True
+        changed = True
 
-    return processedReport
+    # don't bother calculating, writing, and displaying results if nothing even changed
+    if not changed:
+        return(0)
+
+    hitsArcane = hitTableArcane[25] + hitTableArcane[50] + hitTableArcane[75] + hitTableArcane[100]
+    hitsFire = hitTableFire[25] + hitTableFire[50] + hitTableFire[75] + hitTableFire[100]
+    hitsFrost = hitTableFrost[25] + hitTableFrost[50] + hitTableFrost[75] + hitTableFrost[100]
+    hitsNature = hitTableNature[25] + hitTableNature[50] + hitTableNature[75] + hitTableNature[100]
+    hitsShadow = hitTableShadow[25] + hitTableShadow[50] + hitTableShadow[75] + hitTableShadow[100]
+    
+    hitSumArcane = hitTableArcane[25] * 0.25 + hitTableArcane[50] * 0.5 + hitTableArcane[75] * 0.75 + hitTableArcane[100]
+    hitSumFire = hitTableFire[25] * 0.25 + hitTableFire[50] * 0.5 + hitTableFire[75] * 0.75 + hitTableFire[100]
+    hitSumFrost = hitTableFrost[25] * 0.25 + hitTableFrost[50] * 0.5 + hitTableFrost[75] * 0.75 + hitTableFrost[100]
+    hitSumNature = hitTableNature[25] * 0.25 + hitTableNature[50] * 0.5 + hitTableNature[75] * 0.75 + hitTableNature[100]
+    hitSumShadow = hitTableShadow[25] * 0.25 + hitTableShadow[50] * 0.5 + hitTableShadow[75] * 0.75 + hitTableShadow[100]
+
+    missesArcane = hitTableArcane[0]
+    missesFire = hitTableFire[0]
+    missesFrost = hitTableFrost[0]
+    missesNature = hitTableNature[0]
+    missesShadow = hitTableShadow[0]
+
+    castsArcane = hitsArcane + missesArcane
+    castsFire = hitsFire + missesFire
+    castsFrost = hitsFrost + missesFrost
+    castsNature = hitsNature + missesNature
+    castsShadow = hitsShadow + missesShadow
+
+    if hitsArcane > 0: 
+        partialAverageArcane = round(100 * (1 - hitSumArcane / hitsArcane), 2)
+        resistArcane = getResFromPartialAverage(partialAverageArcane, MagicSchool.Arcane, 60, enemy.get('level'))
+    elif castsArcane >= 50 and castsArcane == missesArcane:
+        partialAverageArcane = 'IMMUNE'
+        resistArcane = 'IMMUNE'
+    else:
+        partialAverageArcane = '?'
+        resistArcane = '?'
+        
+    if hitsFire > 0: 
+        partialAverageFire = round(100 * (1 - hitSumFire / hitsFire), 2)
+        resistFire = getResFromPartialAverage(partialAverageFire, MagicSchool.Fire, 60, enemy.get('level'))
+    elif castsFire >= 50 and castsFire == missesFire:
+        partialAverageFire = 'IMMUNE'
+        resistFire = 'IMMUNE'
+    else:
+        partialAverageFire = '?'
+        resistFire = '?'
+
+    if hitsFrost > 0:
+        partialAverageFrost = round(100 * (1 - hitSumFrost / hitsFrost), 2)
+        resistFrost = getResFromPartialAverage(partialAverageFrost, MagicSchool.Frost, 60, enemy.get('level'))
+    elif castsFrost >= 50 and castsFrost == missesFrost:
+        partialAverageFrost = 'IMMUNE'
+        resistFrost = 'IMMUNE'
+    else:
+        partialAverageFrost = '?'
+        resistFrost = '?'
+        
+    if hitsNature > 0:
+        partialAverageNature = round(100 * (1 - hitSumNature / hitsNature), 2)
+        resistNature = getResFromPartialAverage(partialAverageNature, MagicSchool.Nature, 60, enemy.get('level'))
+    elif castsNature >= 50 and castsNature == missesNature:
+        partialAverageNature = 'IMMUNE'
+        resistNature = 'IMMUNE'
+    else:
+        partialAverageNature = '?'
+        resistNature = '?'
+        
+    if hitsShadow > 0:
+        partialAverageShadow = round(100 * (1 - hitSumShadow / hitsShadow), 2)
+        resistShadow = getResFromPartialAverage(partialAverageShadow, MagicSchool.Shadow, 60, enemy.get('level'))
+    elif castsShadow >= 50 and castsShadow == missesShadow:
+        partialAverageShadow = 'IMMUNE'
+        resistShadow = 'IMMUNE'
+    else:
+        partialAverageShadow = '?'
+        resistShadow = '?'
+    
+    # note: the percentages used in the calculations reflect percent of damage done
+    # but when we talk about partial resists we actually mean the opposite.
+    # for e.g. a '75% partial' means that 75% damage was resisted.
+    # so that's why 25 and 75 are swapped when displaying
+    table_data = (
+        ('school', 'res', '#', 'miss', 'full', '25%', '50%', '75%'),
+        ('arcane', resistArcane, castsArcane, missesArcane, hitTableArcane[100], hitTableArcane[75], hitTableArcane[50], hitTableArcane[25]),
+        ('fire', resistFire, castsFire, missesFire, hitTableFire[100], hitTableFire[75], hitTableFire[50], hitTableFire[25]),
+        ('frost', resistFrost, castsFrost, missesFrost, hitTableFrost[100], hitTableFrost[75], hitTableFrost[50], hitTableFrost[25]),
+        ('nature', resistNature, castsNature, missesNature, hitTableNature[100], hitTableNature[75], hitTableNature[50], hitTableNature[25]),
+        ('shadow', resistShadow, castsShadow, missesShadow, hitTableShadow[100], hitTableShadow[75], hitTableShadow[50], hitTableShadow[25]),
+    )
+    
+    if options.get('writeResults'):
+        if options.get('skipCurses'):
+            outputFile = 'results/withoutCurses/' + str(enemy.get('id')) + '.json'
+        else:
+            outputFile = 'results/withCurses/' + str(enemy.get('id')) + '.json'
+            
+        out_file = open(outputFile, "w")
+        json.dump({
+            'enemyID': enemy.get('id'),
+            'enemyName': enemyName,
+            'tables': table_data
+        }, out_file)
+        out_file.close()
+
+    if options.get('quiet') == False:
+        table_instance = AsciiTable(table_data, enemyName)
+        print(table_instance.table)
 
 ##################################################################
 # MAIN
 ##################################################################
+
+#events = fetchAbilityEvents("6bN9dq2RxhVtTZfw", 667, 115, 19714, ['applybuff', 'removebuff'])
+#print(events)
+#exit(0)
 
 # parse options
 options = getOptions(sys.argv[1:]) 
 if verbose == False:
     verbose = options.get('verbose')
 
-# cache report summaries for zone if needed and read it into reportSummaries
-reportSummaries = getReportSummaries(options)
-
 # read item database into jsonItems
 with open('item.json') as itemFile:
     jsonItems = json.load(itemFile)
 
+reportSummaries = getReportSummaries(options)
 for encounter in options['encounters']:
     if verbose: print(' - processing encounter ' + encounter.get('name') + ' (' + str(encounter.get('id')) + ')')
     for enemy in encounter['enemies']:
+        if enemy.get('id') in options.get('ignoreEnemies'):
+            if verbose: print(' -- ignoring enemy ' + enemy.get('name') + ' (' + str(enemy.get('id')) + ')')
+            continue
+
         if verbose: print(' -- processing enemy ' + enemy.get('name') + ' (' + str(enemy.get('id')) + ')')
         hitTables = [
             {0: 0, 25: 0, 50: 0, 75: 0, 100: 0}, # arcane
@@ -741,6 +842,5 @@ for encounter in options['encounters']:
         count = len(reportSummaries)
         for reportSummary in reportSummaries:
             print('[{}] - Processing report {} of {}'.format(enemy.get('name'), counter, count))
-            didProcess = processReport(options, reportSummary, encounter, enemy, hitTables)
-            if didProcess: writeResults(hitTables, enemy) # if nothing was changed, no need to re-write
+            processReport(options, reportSummary, encounter, enemy, hitTables)
             counter += 1

@@ -1,0 +1,1 @@
+{"enemyID": 13020, "enemyName": "Vaelastrasz the Corrupt (without curses)", "tables": [["school", "res", "#", "miss", "full", "25%", "50%", "75%"], ["arcane", 0, 1002, 310, 577, 80, 33, 2], ["fire", "IMMUNE", 1002, 1002, 0, 0, 0, 0], ["frost", "?", 0, 0, 0, 0, 0, 0], ["nature", 0, 1013, 99, 775, 90, 40, 9], ["shadow", 0, 1004, 781, 195, 19, 9, 0]]}
