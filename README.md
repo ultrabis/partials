@@ -24,7 +24,7 @@ You can find the latest results in `resistances.txt`
     - uses both v1 and v2 api's so both keys are needed
     - can use the tool `bin/createToken.sh` to help
 
-`
+```
 Usage: main.py [-h | -d | -a | -r <file.json>] | [OPTIONS] <TARGETS>
 
 -h                      Show usage and exit (this screen)
@@ -48,7 +48,7 @@ TARGETS
 
 EXAMPLE
  Scrape arcane and nature resistance of Shazzrah: main.py -m arcane,nature -e 12264
-`
+```
 
 ## Known issues 
 
