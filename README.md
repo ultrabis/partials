@@ -31,4 +31,4 @@ You can find the latest results in `resistances.txt`
 - Shazzrah may be incorrect due to his `Deaden Magic` ability.
 - Some enemies may not have enough data / time to scrape yet.
 - Some enemies have mechanics that fudge the numbers
-    - Chromaggus, Ossirian, 
+    - Chromaggus, Ossirian, Viscidius
