@@ -16,13 +16,15 @@ You can find the latest results in `resistances.txt`
     - Additional details include number of casts, misses, and partials per school.
     - To display a detailed table per enemy: `./main.py -r results/enemyid.json`
 
-## Setup / Running 
+## Setup
 
 - Requires python with modules:
     - `python -m pip install requests datetime jsonpath-ng terminaltables`
 - To do your own scrapes, must setup `variables.txt` with your api key/token
     - uses both v1 and v2 api's so both keys are needed
     - can use the tool `bin/createToken.sh` to help
+    
+## Usage
 
 ```
 Usage: main.py [-h | -d | -a | -r <file.json>] | [OPTIONS] <TARGETS>
