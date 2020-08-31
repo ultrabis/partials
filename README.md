@@ -20,10 +20,35 @@ You can find the latest results in `resistances.txt`
 
 - Requires python with modules:
     - `python -m pip install requests datetime jsonpath-ng terminaltables`
-- Finally run `./main.py -h` for usage information
 - To do your own scrapes, must setup `variables.txt` with your api key/token
     - uses both v1 and v2 api's so both keys are needed
     - can use the tool `bin/createToken.sh` to help
+
+`
+Usage: main.py [-h | -d | -a | -r <file.json>] | [OPTIONS] <TARGETS>
+
+-h                      Show usage and exit (this screen)
+-d                      Display all zone information and exit (zones, encounters, enemies)
+-r                      Display results from <file.json>
+-a                      Display all results
+
+OPTIONS
+-v                      Verbose output (DEFAULT: False)
+-q                      Quiet mode. (DEFAULT: False)
+-w                      Write results to the 'results' directory (DEFAULT: False)
+-c                      Skip casts with a curse active (DEFAULT: False)
+-i                      Enemies to ignore delimited by comma (DEFAULT: None)
+-s  <spellCastLimit>    Stop scraping a school after number of casts reaches <spellCastLimit> (DEFAULT: 1000)
+-m  <magicSchoolNames>  Magic school names delimited by comma (DEFAULT: arcane,fire,frost,nature,shadow)
+
+TARGETS
+-e  <enemyID>           Scrape one <enemyID> OR
+-n  <encounterID>       Scrape all enemies in <encounterID> OR
+-z  <zoneID>            Scrape all enemies in <zoneID>
+
+EXAMPLE
+ Scrape arcane and nature resistance of Shazzrah: main.py -m arcane,nature -e 12264
+`
 
 ## Known issues 
 
