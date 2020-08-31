@@ -12,7 +12,7 @@ You can find the latest results in `resistances.txt`
 - Scraping was limited to 50,000 reports and 1,000 casts per magic school to save time
     - This is enough to determine if an enemy has any resistances, but...
     - There *seems* to be 1-10 points of variance due to this sample size
-- More details per enemy can be found in `results/`
+- More details per enemy can be found in `logs/` and `results/`
     - Additional details include number of casts, misses, and partials per school.
     - To display a detailed table per enemy: `./main.py -r results/enemyid.json`
 
