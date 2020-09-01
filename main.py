@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os, sys, glob, requests, datetime, gzip, json, enum, getopt
 from utils import fetchActors, fetchGear, fetchDamageEvents, fetchAbilityEvents, fetchReportList, fetchReportSummary # graphql queries
@@ -93,6 +93,24 @@ class Report:
         except:
             enemyID = 0
         return [actorList, enemyID]
+
+    # FIXME: dumb hack for shazzrahs deaden magic. should clean up someday, but not today.
+    def getDeadenMagicUptime(self):  
+        if not self.enemyID:
+            return []
+            
+        url = "https://classic.warcraftlogs.com:443/v1/report/tables/buffs/{reportCode}?start=0&end=999999999999&hostility=1&by=source&abilityid={abilityID}&encounter={encounterID}&api_key={apiKey}".format(
+            reportCode=self.reportCode, abilityID=19714, encounterID=self.encounterID, apiKey=apiKey)
+
+        try:
+            response = requests.get(url)
+            response.close()
+            data = response.json()
+            data = next(filter(lambda event: event.get('id') == self.enemyID, data.get('auras', [])))
+            events = [DebuffEvent(event.get('startTime'), event.get('endTime')) for event in data.get('bands')]
+            return events
+        except:
+            return []
 
     def getCurseUptime(self):  # Selects only one entry for simplicity
         if not self.enemyID:
@@ -195,10 +213,17 @@ class Report:
             if spellPenValue > 0:
                 continue
 
+            # get damage event
             damage = event.get('unmitigatedAmount', 0) * self.spec.get('hitTypes').get(event.get('hitType'), 1)
-            curseDamage = self.getCurrentTimestamp(event.get('timestamp'), damage, self.curseEvents)
 
-            # if skipCurses is set in arguments, we want to ignore any cast with a curse present
+            # handle shazzrah hack for Deaden Magic 
+            if self.enemyIDs[0] == 12264: 
+                deadenMagicDamage = self.getCurrentTimestamp(event.get('timestamp'), damage, self.getDeadenMagicUptime())
+                if deadenMagicDamage > 0:
+                    continue
+
+            # handle curses. if skipCurses is set, we'll ignore the cast
+            curseDamage = self.getCurrentTimestamp(event.get('timestamp'), damage, self.curseEvents)
             if self.options.get('skipCurses'):
                 if curseDamage > 0:
                     continue
@@ -382,17 +407,19 @@ def getOptions(argv):
             #spec['name'] = 'Balance'
             #spec['icon'] = 'Druid-Balance'
             #spec['spellIDs'] = [9912] # Wrath Rank 8
+
             spec['name'] = 'Elemental'
             spec['icon'] = 'Shaman-Elemental'
+            spec['spellIDs'] = [15208] # Lightning Bolt Rank 10
+
             spec['magicSchool'] = MagicSchool.Nature
             spec['curseID'] = None
-            spec['spellIDs'] = [15208, 915] # Lightning Bolt Rank 10, Lightning Bolt Rank 4
             spec['hitTypes'] = {
                 1: 1,  # hitType = 1, hit
-                2: 1.5,  # hitType = 2, crit
+                2: 2.0,  # hitType = 2, crit (elemental fury talent makes crit * 2)
                 14: 0,  # hitType = 14, resist
                 16: 1,  # hitType = 16, partial hit
-                17: 1.5  # hitType = 17, partial crit
+                17: 2.0  # hitType = 17, partial crit (elemental fury talent makes crit * 2)
             }
             options['specs'].append(spec)
         elif magicSchoolName == 'shadow':
@@ -641,7 +668,16 @@ def getResFromPartialAverage(partialPercent, magicSchool, playerLevel:int = 60, 
         resFromLevel = levelDiff * 8
 
     # convert partial percent to resistance and remove level based resistances
-    return max(round((partialPercent * 4) - resFromLevel, 2), 0)
+    res = max(round((partialPercent * 4) - resFromLevel, 2), 0)
+    if verbose: print(
+        'res=' +
+        str(res) +
+        'partialAvg%=' +
+        str(partialPercent) +
+        ', resFromLevel=' +
+        str(resFromLevel) + ''
+    )
+    return res
 
 ##################################################################
 # processReport
@@ -661,7 +697,6 @@ def processReport(options, reportSummary, encounter, enemy, hitTables):
 
     changed = False
     for spec in options.get('specs'):
-        if verbose: print(spec)
         magicSchool = spec.get('magicSchool')
 
         # check the spells used and specs present in the report summary
