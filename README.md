@@ -2,6 +2,10 @@
 
 This tool attempts to determine the resistance values of enemies by scraping Warcraft Logs.
 
+## TLDR
+
+Spell penetration is worthless unless you're fighting Lucifron (Fire / Shadow), Gehennas (Fire / Shadow), or Shazzrah (Fire / Arcane). 
+
 ## Results
 
 You can find the latest results in `resistances.txt`
